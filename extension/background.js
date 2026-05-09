@@ -20,17 +20,19 @@ async function fetchWithFallback(apiBase, paths, init) {
 function extractSseEvents(raw) {
   const events = [];
   for (const frame of raw.split("\n\n")) {
-    const eventLine = frame.split("\n").find((line) => line.startsWith("event: "));
-    const dataLine = frame.split("\n").find((line) => line.startsWith("data: "));
-    if (!dataLine) continue;
+    const lines = frame.split("\n").map((l) => l.trimEnd());
+    const eventLine = lines.find((line) => line.startsWith("event: "));
+    const dataLines = lines.filter((line) => line.startsWith("data: "));
+    if (dataLines.length === 0) continue;
 
     const event = eventLine ? eventLine.slice(7).trim() : "message";
+    const dataRaw = dataLines.map((l) => l.slice(6)).join("\n").trim();
 
     try {
-      const parsed = JSON.parse(dataLine.slice(6));
+      const parsed = JSON.parse(dataRaw);
       events.push({ event, data: parsed });
     } catch {
-      // Ignore incomplete frames; the next network chunk may complete them.
+      events.push({ event, data: dataRaw });
     }
   }
   return events;
@@ -55,6 +57,7 @@ async function streamPrimerToTab({
       await chrome.tabs.sendMessage(tabId, { type: "PRIMER_CHUNK", requestId, chunk });
       await new Promise((r) => setTimeout(r, 35));
     }
+    await chrome.tabs.sendMessage(tabId, { type: "PRIMER_PROSE_DONE", requestId });
     await chrome.tabs.sendMessage(tabId, { type: "PRIMER_DONE", requestId });
     return;
   }
@@ -87,6 +90,7 @@ async function streamPrimerToTab({
   if (!reader) {
     const text = await res.text();
     await chrome.tabs.sendMessage(tabId, { type: "PRIMER_CHUNK", requestId, chunk: text });
+    await chrome.tabs.sendMessage(tabId, { type: "PRIMER_PROSE_DONE", requestId });
     await chrome.tabs.sendMessage(tabId, { type: "PRIMER_DONE", requestId });
     return;
   }
@@ -94,6 +98,7 @@ async function streamPrimerToTab({
   const decoder = new TextDecoder();
   let sseBuffer = "";
   const isSse = (res.headers.get("content-type") || "").includes("text/event-stream");
+  let proseDoneSent = false;
 
   while (true) {
     const { value, done } = await reader.read();
@@ -109,24 +114,47 @@ async function streamPrimerToTab({
     const parts = sseBuffer.split("\n\n");
     sseBuffer = parts.pop() || "";
     for (const event of extractSseEvents(parts.join("\n\n"))) {
-      if (event.event === "delta" && event.data?.text) {
+      const eventName = String(event.event || "").trim().toLowerCase();
+
+      if (eventName === "delta") {
+        const deltaText = typeof event.data === "string" ? event.data : event.data?.text;
+        if (!deltaText) continue;
         await chrome.tabs.sendMessage(tabId, {
           type: "PRIMER_CHUNK",
           requestId,
-          chunk: event.data.text,
+          chunk: deltaText,
         });
       }
-      if (event.event === "prose_done") {
+      if (eventName === "prose_done") {
+        proseDoneSent = true;
         await chrome.tabs.sendMessage(tabId, { type: "PRIMER_PROSE_DONE", requestId });
       }
-      if (event.event === "prerequisites") {
+      if (eventName === "prerequisites") {
+        const items =
+          typeof event.data === "object" && event.data
+            ? event.data.items
+            : typeof event.data === "string"
+              ? (() => {
+                  try {
+                    const parsed = JSON.parse(event.data);
+                    return parsed?.items;
+                  } catch {
+                    return null;
+                  }
+                })()
+              : null;
         await chrome.tabs.sendMessage(tabId, {
           type: "PRIMER_PREREQUISITES",
           requestId,
-          items: Array.isArray(event.data?.items) ? event.data.items : [],
+          items: Array.isArray(items) ? items : [],
         });
       }
     }
+  }
+
+  // Some backends never send prose_done; still trigger prerequisite loading UI after prose completes.
+  if (!proseDoneSent) {
+    await chrome.tabs.sendMessage(tabId, { type: "PRIMER_PROSE_DONE", requestId });
   }
   await chrome.tabs.sendMessage(tabId, { type: "PRIMER_DONE", requestId });
 }
