@@ -99,6 +99,7 @@ async function streamPrimerToTab({
   let sseBuffer = "";
   const isSse = (res.headers.get("content-type") || "").includes("text/event-stream");
   let proseDoneSent = false;
+  let prereqsSent = false;
 
   while (true) {
     const { value, done } = await reader.read();
@@ -148,6 +149,7 @@ async function streamPrimerToTab({
           requestId,
           items: Array.isArray(items) ? items : [],
         });
+        prereqsSent = true;
       }
     }
   }
@@ -155,6 +157,10 @@ async function streamPrimerToTab({
   // Some backends never send prose_done; still trigger prerequisite loading UI after prose completes.
   if (!proseDoneSent) {
     await chrome.tabs.sendMessage(tabId, { type: "PRIMER_PROSE_DONE", requestId });
+  }
+  // Some backends never send prerequisites; complete the prereq section with an empty array.
+  if (!prereqsSent) {
+    await chrome.tabs.sendMessage(tabId, { type: "PRIMER_PREREQUISITES", requestId, items: [] });
   }
   await chrome.tabs.sendMessage(tabId, { type: "PRIMER_DONE", requestId });
 }

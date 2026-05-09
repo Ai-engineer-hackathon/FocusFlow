@@ -8,6 +8,7 @@ let primerPanel = null;
 let activeRequestId = null;
 let activePanelState = null;
 let activePrimerListener = null;
+let prereqTimeout = null;
 
 function createEl(tag, className, text) {
   const el = document.createElement(tag);
@@ -151,6 +152,10 @@ function removePrimerPanel() {
     chrome.runtime.onMessage.removeListener(activePrimerListener);
     activePrimerListener = null;
   }
+  if (prereqTimeout) {
+    window.clearTimeout(prereqTimeout);
+    prereqTimeout = null;
+  }
   primerPanel?.remove();
   primerPanel = null;
   activeRequestId = null;
@@ -271,10 +276,19 @@ function renderPrerequisiteLoading() {
   const state = activePanelState;
   if (!state) return;
   state.prereqWrap.replaceChildren();
+  state.prereqLoading = true;
   const row = createEl("div", "ff-prereq__loading");
   row.append(createEl("span", "ff-prereq__spinner"));
   row.append(createEl("span", "", "Finding prerequisites..."));
   state.prereqWrap.append(row);
+
+  if (prereqTimeout) window.clearTimeout(prereqTimeout);
+  prereqTimeout = window.setTimeout(() => {
+    if (!activePanelState || activePanelState !== state) return;
+    if (!state.prereqLoading) return;
+    state.prereqWrap.replaceChildren();
+    state.prereqLoading = false;
+  }, 8000);
 }
 
 function restorePreviousPrimer() {
@@ -343,6 +357,7 @@ async function showPrimerPanel(details) {
     path: [details.selectedText],
     currentDetails: details,
     prerequisites: [],
+    prereqLoading: false,
     backBtn,
     breadcrumb,
     selected,
@@ -380,13 +395,37 @@ async function showPrimerPanel(details) {
     if (msg.type === "PRIMER_PREREQUISITES") {
       if (activePanelState) {
         activePanelState.prerequisites = msg.items || [];
+        activePanelState.prereqLoading = false;
+      }
+      if (prereqTimeout) {
+        window.clearTimeout(prereqTimeout);
+        prereqTimeout = null;
       }
       renderPrerequisites(msg.items || []);
+      return;
+    }
+    if (msg.type === "PRIMER_DONE") {
+      if (activePanelState?.prereqLoading) {
+        activePanelState.prereqWrap.replaceChildren();
+        activePanelState.prereqLoading = false;
+      }
+      if (prereqTimeout) {
+        window.clearTimeout(prereqTimeout);
+        prereqTimeout = null;
+      }
       return;
     }
     if (msg.type === "PRIMER_ERROR") {
       status.textContent = msg.error || "Primer failed.";
       spinner.style.display = "none";
+      if (activePanelState?.prereqLoading) {
+        activePanelState.prereqWrap.replaceChildren();
+        activePanelState.prereqLoading = false;
+      }
+      if (prereqTimeout) {
+        window.clearTimeout(prereqTimeout);
+        prereqTimeout = null;
+      }
     }
   };
 
