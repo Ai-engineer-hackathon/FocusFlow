@@ -1,6 +1,6 @@
 const DEFAULT_API_BASE = "https://your-vercel-backend.api";
 
-const ENABLE_MOCK = true; // Set false when backend is live.
+const ENABLE_MOCK = false; // Set true to use mocked responses.
 
 function normalizeConceptKey(concept) {
   return String(concept || "").trim().toLowerCase();
