@@ -358,7 +358,7 @@ async function showPrimerPanel(details) {
   const backBtn = createEl("button", "ff-primer-panel__back", "←");
   backBtn.type = "button";
   backBtn.hidden = true;
-  const title = createEl("div", "ff-primer-panel__title", "Primer");
+  const title = createEl("div", "ff-primer-panel__title", "Explanation");
   const closeBtn = createEl("button", "ff-primer-panel__close", "×");
   closeBtn.type = "button";
   header.append(backBtn, title, closeBtn);

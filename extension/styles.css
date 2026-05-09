@@ -3,6 +3,8 @@
 .ff-primer-panel * {
   box-sizing: border-box;
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+  letter-spacing: 0;
+  text-shadow: none;
 }
 
 .ff-selection-button {
@@ -20,9 +22,7 @@
   font-size: 13px;
   font-weight: 800;
   line-height: 1;
-  letter-spacing: 0;
   padding: 9px 12px;
-  text-shadow: none;
 }
 
 .ff-selection-button:hover {
@@ -38,15 +38,29 @@
   position: absolute;
   z-index: 2147483647;
   width: min(360px, calc(100vw - 16px));
-  max-height: min(420px, calc(100vh - 16px));
-  overflow: auto;
+  min-width: min(280px, calc(100vw - 16px));
+  min-height: min(240px, calc(100vh - 16px));
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  resize: both;
+  color-scheme: light;
   background: #ffffff;
   color: #111827;
   border: 1px solid rgba(0, 0, 0, 0.1);
   border-left: 4px solid #2563eb;
   border-radius: 8px;
   box-shadow: 0 14px 42px rgba(0, 0, 0, 0.22);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.45;
   padding: 12px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 .ff-primer-panel__header {
@@ -64,7 +78,6 @@
 
 .ff-primer-panel__title {
   flex: 1 1 auto;
-  font-size: 13px;
   font-weight: 700;
 }
 
@@ -104,8 +117,7 @@
   flex-wrap: wrap;
   gap: 4px;
   margin-top: 8px;
-  font-size: 11px;
-  line-height: 1.3;
+  line-height: inherit;
 }
 
 .ff-breadcrumb[hidden] {
@@ -133,8 +145,7 @@
   background: #f3f4f6;
   border-radius: 6px;
   color: #374151;
-  font-size: 12px;
-  line-height: 1.35;
+  line-height: inherit;
   max-height: 88px;
   overflow: auto;
 }
@@ -142,16 +153,15 @@
 .ff-primer-panel__status {
   margin-top: 10px;
   color: #6b7280;
-  font-size: 11px;
 }
 
 .ff-primer-panel__body {
   margin-top: 8px;
-  max-height: 210px;
+  flex: 1 1 120px;
+  min-height: 80px;
   overflow: auto;
   color: #111827;
-  font-size: 13px;
-  line-height: 1.5;
+  line-height: inherit;
   white-space: pre-wrap;
 }
 
@@ -165,7 +175,6 @@
 
 .ff-prereq__title {
   color: #6b7280;
-  font-size: 11px;
   font-weight: 650;
   margin-bottom: 6px;
 }
@@ -180,7 +189,6 @@
   align-items: center;
   color: #6b7280;
   display: flex;
-  font-size: 11px;
   gap: 7px;
 }
 
@@ -194,21 +202,41 @@
 }
 
 .ff-prereq__chip {
-  appearance: none;
-  border: 1px solid rgba(37, 99, 235, 0.18);
-  background: rgba(37, 99, 235, 0.07);
-  color: #1d4ed8;
-  border-radius: 999px;
+  appearance: none !important;
+  background: #eff6ff !important;
+  border: 1px solid #bfdbfe !important;
+  border-radius: 999px !important;
+  box-shadow: none !important;
+  color: #1d4ed8 !important;
   cursor: pointer;
-  font-size: 11px;
-  line-height: 1;
-  padding: 7px 9px;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial !important;
+  font-size: 13px !important;
+  font-style: normal !important;
+  font-weight: 400 !important;
+  letter-spacing: 0 !important;
+  line-height: 1 !important;
+  margin: 0 !important;
+  min-height: 0 !important;
+  padding: 7px 9px !important;
+  text-align: center !important;
+  text-decoration: none !important;
+  text-shadow: none !important;
+  white-space: nowrap !important;
   transition: background 120ms ease, border-color 120ms ease;
 }
 
 .ff-prereq__chip:hover {
-  background: rgba(37, 99, 235, 0.13);
-  border-color: rgba(37, 99, 235, 0.3);
+  background: #dbeafe !important;
+  border-color: #93c5fd !important;
+}
+
+.ff-prereq__chipText {
+  color: inherit !important;
+  font: inherit !important;
+  letter-spacing: inherit !important;
+  line-height: inherit !important;
+  text-decoration: none !important;
+  text-shadow: none !important;
 }
 
 .ff-inline-code {
@@ -217,7 +245,7 @@
   border-radius: 4px;
   color: #111827;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
+  font-size: inherit;
   padding: 1px 4px;
 }
 
