@@ -1,6 +1,6 @@
-const API_BASE = "https://your-vercel-backend.api";
+const DEFAULT_API_BASE = "https://your-vercel-backend.api";
 
-const ENABLE_MOCK = true;
+const ENABLE_MOCK = true; // Set false when backend is live.
 
 function normalizeConceptKey(concept) {
   return String(concept || "").trim().toLowerCase();
@@ -27,13 +27,29 @@ async function analyzePage(paragraphs) {
     };
   }
 
-  const res = await fetch(`${API_BASE}/analyze`, {
+  const apiBase = await getApiBase();
+  const res = await fetchWithFallback(apiBase, ["/analyze", "/api/analyze"], {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ paragraphs }),
   });
   if (!res.ok) throw new Error(`Analyze failed: ${res.status}`);
   return await res.json();
+}
+
+async function getApiBase() {
+  const { ffApiBase } = await chrome.storage.local.get(["ffApiBase"]);
+  return (ffApiBase || DEFAULT_API_BASE).replace(/\/+$/, "");
+}
+
+async function fetchWithFallback(apiBase, paths, init) {
+  let lastRes = null;
+  for (const path of paths) {
+    const res = await fetch(`${apiBase}${path}`, init);
+    if (res.status !== 404) return res;
+    lastRes = res;
+  }
+  return lastRes || fetch(`${apiBase}${paths[0]}`, init);
 }
 
 async function streamPrimerToTab({ tabId, requestId, concept, url }) {
@@ -52,7 +68,8 @@ async function streamPrimerToTab({ tabId, requestId, concept, url }) {
     return;
   }
 
-  const res = await fetch(`${API_BASE}/primer`, {
+  const apiBase = await getApiBase();
+  const res = await fetchWithFallback(apiBase, ["/primer", "/api/primer"], {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ concept, url }),
@@ -105,6 +122,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     if (request.type === "MARK_KNOWN") {
       await markConceptKnown(request.concept);
+      sendResponse({ ok: true });
+      return;
+    }
+
+    if (request.type === "SET_API_BASE") {
+      const apiBase = String(request.apiBase || "").trim();
+      if (!apiBase) {
+        sendResponse({ ok: false, error: "Missing apiBase" });
+        return;
+      }
+      await chrome.storage.local.set({ ffApiBase: apiBase });
       sendResponse({ ok: true });
       return;
     }
