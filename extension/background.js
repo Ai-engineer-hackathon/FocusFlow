@@ -38,6 +38,39 @@ function extractSseEvents(raw) {
   return events;
 }
 
+function coercePrereqItems(data) {
+  if (!data) return null;
+  if (Array.isArray(data)) return data;
+  if (typeof data === "object") {
+    if (Array.isArray(data.items)) return data.items;
+    if (Array.isArray(data.prerequisites)) return data.prerequisites;
+    if (Array.isArray(data.prereqs)) return data.prereqs;
+    if (typeof data.type === "string") {
+      const t = data.type.toLowerCase();
+      if (t.includes("prereq") && Array.isArray(data.items)) return data.items;
+      if (t.includes("prereq") && Array.isArray(data.prerequisites)) return data.prerequisites;
+    }
+  }
+  if (typeof data === "string") {
+    try {
+      const parsed = JSON.parse(data);
+      return coercePrereqItems(parsed);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function coerceDeltaText(data) {
+  if (!data) return null;
+  if (typeof data === "string") return data;
+  if (typeof data === "object" && typeof data.text === "string") return data.text;
+  if (typeof data === "object" && typeof data.delta === "string") return data.delta;
+  if (typeof data === "object" && typeof data.content === "string") return data.content;
+  return null;
+}
+
 async function streamPrimerToTab({
   tabId,
   requestId,
@@ -117,39 +150,41 @@ async function streamPrimerToTab({
     for (const event of extractSseEvents(parts.join("\n\n"))) {
       const eventName = String(event.event || "").trim().toLowerCase();
 
-      if (eventName === "delta") {
-        const deltaText = typeof event.data === "string" ? event.data : event.data?.text;
-        if (!deltaText) continue;
+      if (eventName === "delta" || eventName === "message") {
+        const deltaText = coerceDeltaText(event.data);
+        if (deltaText) {
         await chrome.tabs.sendMessage(tabId, {
           type: "PRIMER_CHUNK",
           requestId,
           chunk: deltaText,
         });
+        }
       }
-      if (eventName === "prose_done") {
+      if (eventName === "prose_done" || eventName === "prosedone") {
         proseDoneSent = true;
         await chrome.tabs.sendMessage(tabId, { type: "PRIMER_PROSE_DONE", requestId });
       }
-      if (eventName === "prerequisites") {
-        const items =
-          typeof event.data === "object" && event.data
-            ? event.data.items
-            : typeof event.data === "string"
-              ? (() => {
-                  try {
-                    const parsed = JSON.parse(event.data);
-                    return parsed?.items;
-                  } catch {
-                    return null;
-                  }
-                })()
-              : null;
+      if (eventName.includes("prereq")) {
+        const items = coercePrereqItems(event.data);
         await chrome.tabs.sendMessage(tabId, {
           type: "PRIMER_PREREQUISITES",
           requestId,
           items: Array.isArray(items) ? items : [],
         });
         prereqsSent = true;
+      }
+
+      // Some backends send prerequisites inside a generic "message" event payload.
+      if (!prereqsSent) {
+        const items = coercePrereqItems(event.data);
+        if (Array.isArray(items)) {
+          await chrome.tabs.sendMessage(tabId, {
+            type: "PRIMER_PREREQUISITES",
+            requestId,
+            items,
+          });
+          prereqsSent = true;
+        }
       }
     }
   }
