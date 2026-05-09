@@ -408,13 +408,16 @@ async function showPrimerPanel(details) {
     if (msg.type === "PRIMER_DONE") {
       status.textContent = "Explanation";
       spinner.style.display = "none";
+      if (prereqTimeout) {
+        window.clearTimeout(prereqTimeout);
+        prereqTimeout = null;
+      }
       return;
     }
     if (msg.type === "PRIMER_PROSE_DONE") {
       status.textContent = "Explanation";
       spinner.style.display = "none";
       renderPrerequisiteLoading();
-      requestPrerequisites(activePanelState.currentDetails);
       return;
     }
     if (msg.type === "PRIMER_PREREQUISITES") {
@@ -426,13 +429,6 @@ async function showPrimerPanel(details) {
         prereqTimeout = null;
       }
       renderPrerequisites(msg.items || []);
-      return;
-    }
-    if (msg.type === "PRIMER_DONE") {
-      if (prereqTimeout) {
-        window.clearTimeout(prereqTimeout);
-        prereqTimeout = null;
-      }
       return;
     }
     if (msg.type === "PRIMER_ERROR") {
