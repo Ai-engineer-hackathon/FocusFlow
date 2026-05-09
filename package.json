@@ -1,0 +1,14 @@
+{
+  "name": "focusflow-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "dev": "node scripts/local-server.js",
+    "vercel:dev": "vercel dev",
+    "smoke": "node scripts/smoke.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
