@@ -355,11 +355,12 @@ async function showPrimerPanel(details) {
 
   primerPanel = createEl("div", "ff-primer-panel");
   const header = createEl("div", "ff-primer-panel__header");
-  const backBtn = createEl("button", "ff-primer-panel__back", "←");
+  // ASCII-only glyphs avoid mojibake if this file is ever served with the wrong encoding.
+  const backBtn = createEl("button", "ff-primer-panel__back", "<");
   backBtn.type = "button";
   backBtn.hidden = true;
   const title = createEl("div", "ff-primer-panel__title", "Explanation");
-  const closeBtn = createEl("button", "ff-primer-panel__close", "×");
+  const closeBtn = createEl("button", "ff-primer-panel__close", "x");
   closeBtn.type = "button";
   header.append(backBtn, title, closeBtn);
 

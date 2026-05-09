@@ -1,10 +1,74 @@
 .ff-selection-button,
 .ff-primer-panel,
-.ff-primer-panel * {
+.ff-primer-panel *,
+.ff-popup,
+.ff-popup * {
   box-sizing: border-box;
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
   letter-spacing: 0;
   text-shadow: none;
+}
+
+.ff-muted {
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.35;
+}
+
+.ff-label {
+  display: block;
+  font-size: 12px;
+  color: #374151;
+  margin-top: 10px;
+  margin-bottom: 4px;
+}
+
+.ff-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 8px;
+  color: #111827;
+  background: #ffffff;
+}
+
+.ff-btn {
+  appearance: none;
+  background: #2563eb;
+  color: #ffffff;
+  border: none;
+  padding: 9px 10px;
+  cursor: pointer;
+  width: 100%;
+  border-radius: 8px;
+  margin-top: 10px;
+  font-weight: 650;
+}
+
+.ff-btn:hover {
+  background: #1d4ed8;
+}
+
+.ff-status {
+  font-size: 12px;
+  color: #111827;
+  margin-top: 10px;
+}
+
+.ff-popup {
+  width: 320px;
+  padding: 12px;
+  margin: 0;
+  color: #111827;
+  background: #ffffff;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.ff-popup__title {
+  font-size: 16px;
+  margin: 0 0 6px 0;
+  font-weight: 750;
 }
 
 .ff-selection-button {
@@ -63,6 +127,14 @@
   text-size-adjust: 100%;
 }
 
+.ff-primer-panel button,
+.ff-primer-panel input,
+.ff-primer-panel textarea,
+.ff-primer-panel select {
+  font: inherit;
+  letter-spacing: inherit;
+}
+
 .ff-primer-panel__header {
   display: flex;
   align-items: center;
@@ -90,7 +162,7 @@
   height: 26px;
   border-radius: 6px;
   cursor: pointer;
-  font-size: 16px;
+  font-size: 14px;
   line-height: 1;
 }
 
@@ -107,7 +179,7 @@
   height: 26px;
   border-radius: 6px;
   cursor: pointer;
-  font-size: 18px;
+  font-size: 16px;
   line-height: 1;
 }
 
