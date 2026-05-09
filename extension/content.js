@@ -1,7 +1,12 @@
 const FF = {
   dwellThresholdMs: 30_000,
   minParagraphChars: 60,
+  maxConceptBannersPerPage: 3,
 };
+
+function normalizeConceptKey(concept) {
+  return String(concept || "").trim().toLowerCase();
+}
 
 function getReadableRoot() {
   return (
@@ -104,13 +109,19 @@ function createEl(tag, className, text) {
 function injectBanner(paragraphIndex, concept, paragraphEls, opts = {}) {
   const anchor = paragraphEls[paragraphIndex];
   if (!anchor) return;
-  if (anchor.dataset.ffBannerInjected === "1") return;
+
+  const conceptKey = normalizeConceptKey(concept);
+  const existingSame = anchor.parentElement?.querySelector(
+    `.ff-gap-banner[data-ff-anchor-index="${paragraphIndex}"][data-ff-concept-key="${conceptKey}"]`,
+  );
+  if (existingSame) return;
 
   anchor.classList.add("ff-gap-highlight");
 
   const banner = createEl("div", "ff-gap-banner");
   banner.dataset.ffAnchorIndex = String(paragraphIndex);
   banner.dataset.ffConcept = concept;
+  banner.dataset.ffConceptKey = conceptKey;
 
   const row = createEl("div", "ff-gap-banner__row");
   const left = createEl("div");
@@ -184,8 +195,10 @@ function injectBanner(paragraphIndex, concept, paragraphEls, opts = {}) {
     knowBtn.addEventListener("click", () => {
       chrome.runtime.sendMessage({ type: "MARK_KNOWN", concept });
       banner.remove();
-      anchor.classList.remove("ff-gap-highlight");
-      anchor.dataset.ffBannerInjected = "";
+      const hasMoreBanners = !!anchor.parentElement?.querySelector(
+        `.ff-gap-banner[data-ff-anchor-index="${paragraphIndex}"]`,
+      );
+      if (!hasMoreBanners) anchor.classList.remove("ff-gap-highlight");
     });
   }
 
@@ -210,7 +223,6 @@ function injectBanner(paragraphIndex, concept, paragraphEls, opts = {}) {
   };
 
   chrome.runtime.onMessage.addListener(onPrimerMessage);
-  anchor.dataset.ffBannerInjected = "1";
 }
 
 async function analyzeAndInject() {
@@ -231,7 +243,15 @@ async function analyzeAndInject() {
     (resp) => {
       if (!resp || !Array.isArray(resp.concepts) || resp.concepts.length === 0) return;
       const idx = Math.max(0, Math.min(paragraphEls.length - 1, resp.load_bearing_paragraph_index ?? 0));
-      injectBanner(idx, resp.concepts[0], paragraphEls);
+
+      const concepts = resp.concepts
+        .map((c) => String(c || "").trim())
+        .filter(Boolean)
+        .slice(0, FF.maxConceptBannersPerPage);
+
+      for (const concept of concepts) {
+        injectBanner(idx, concept, paragraphEls);
+      }
     },
   );
 }
