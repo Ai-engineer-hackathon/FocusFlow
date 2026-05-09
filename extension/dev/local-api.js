@@ -2,7 +2,7 @@
  * Local HTTP API for extension integration testing.
  *
  * Endpoint:
- * - POST /api/primer { selectedText: string, paragraph?: string, codeContext?: string[] } -> streamed plain text
+ * - POST /api/primer { selectedText: string, paragraph?: string, codeContext?: string[] } -> streamed explanation + prerequisite events
  *
  * Usage (PowerShell):
  *   $env:OPENAI_API_KEY="sk-..."; node extension/dev/local-api.js
@@ -139,6 +139,52 @@ async function openaiStreamText({ model, messages, onChunk }) {
   }
 }
 
+function compactText(value, maxLength) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+
+function normalizePrerequisites(result) {
+  const items = Array.isArray(result?.items)
+    ? result.items
+        .map((item) => ({
+          concept: compactText(item.concept || item.name || item.label, 48),
+          oneLiner: compactText(item.oneLiner || item.reason || item.description, 140),
+        }))
+        .filter((item) => item.concept && item.oneLiner)
+        .slice(0, 4)
+    : [];
+
+  return { items };
+}
+
+async function openaiJson({ model, messages }) {
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      response_format: { type: "json_object" },
+      temperature: 0.2,
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => "");
+    throw new Error(`OpenAI error ${response.status}: ${errText}`);
+  }
+
+  const data = await response.json();
+  const content = data?.choices?.[0]?.message?.content || "{}";
+  return JSON.parse(content);
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     setCors(res);
@@ -194,6 +240,38 @@ const server = http.createServer(async (req, res) => {
         messages,
         onChunk: (chunk) => sse(res, "delta", { text: chunk }),
       });
+
+      sse(res, "prose_done", {});
+
+      try {
+        const prerequisites = await openaiJson({
+          model: MODEL,
+          messages: [
+            {
+              role: "system",
+              content:
+                "Identify prerequisite concepts for a developer who highlighted technical text. " +
+                "Return only valid JSON in this shape: {\"items\":[{\"concept\":string,\"oneLiner\":string}]}. " +
+                "Return 2 to 4 prerequisite chips that the highlighted term builds on. " +
+                "Skip the article's main topic, skip the highlighted term itself, and skip extremely basic concepts unless directly necessary. " +
+                "Order from most foundational to least foundational. If there are no meaningful prerequisites, return {\"items\":[]}.",
+            },
+            {
+              role: "user",
+              content:
+                `Highlighted text:\n${selectedText}\n\n` +
+                `Article title: ${title}\nArticle URL: ${pageUrl}\n\n` +
+                `Previous paragraph:\n${previousParagraph || "(none)"}\n\n` +
+                `Current paragraph:\n${paragraph || "(none)"}\n\n` +
+                `Next paragraph:\n${nextParagraph || "(none)"}\n\n` +
+                `Nearby code from the article:\n${codeContext.length ? codeContext.map((code, index) => `Code ${index + 1}:\n${code}`).join("\n\n") : "(none)"}`,
+            },
+          ],
+        });
+        sse(res, "prerequisites", normalizePrerequisites(prerequisites));
+      } catch {
+        sse(res, "prerequisites", { items: [] });
+      }
 
       sse(res, "done", {});
       res.end();
