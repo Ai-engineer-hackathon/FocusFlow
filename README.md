@@ -3,39 +3,32 @@
 Chrome extension for technical reading. Highlight confusing text on a page, click
 Explain, and FocusFlow streams a short primer in context.
 
-## Endpoints
+## Prerequisites
 
-`POST /api/primer`
+- Node.js >= 18 (see `package.json` `engines.node`)
+- An OpenAI API key (`OPENAI_API_KEY`) for `/api/primer`
 
-Streams Server-Sent Events:
+## Quickstart (Local)
 
-```json
-{
-  "selectedText": "Because the callback inside useEffect forms a closure...",
-  "title": "Understanding React Hooks",
-  "url": "https://example.com/react-hooks",
-  "previousParagraph": "The paragraph before the selected text...",
-  "paragraph": "The paragraph containing the selected text...",
-  "nextParagraph": "The paragraph after the selected text...",
-  "codeContext": [
-    "useEffect(() => {\n  fetchRoom(roomId)\n}, [roomId])"
-  ]
-}
-```
+1. Clone the repo and `cd` into it.
+2. Copy `.env.example` to `.env` and set `OPENAI_API_KEY`.
+3. (Optional) Install packages: `npm install` (the backend uses minimal/no dependencies, but this is safe to run).
+4. Start the local backend: `npm run dev` (defaults to `http://localhost:3000`).
+5. Load the Chrome extension:
+   - Open `chrome://extensions`, enable **Developer mode**.
+   - Click **Load unpacked** and select the `extension/` folder.
+6. Configure the extension:
+   - Click the FocusFlow extension icon.
+   - Set **Backend API Base** to `http://localhost:3000` and click **Save API Base**.
+7. Visit a technical article, highlight text, then click **Explain**.
 
-Events:
+## Usage
 
-- `start` with the selected text
-- `delta` with `{ "text": "..." }`
-- `done` when complete
+![Usage](docs/images/endpoints.png)
 
 ## Local Setup
 
-1. Copy `.env.example` to `.env` and set `OPENAI_API_KEY`.
-2. Run `npm run dev`.
-3. Point the extension at `http://localhost:3000`.
-4. Load `extension/` as an unpacked Chrome extension.
-5. Highlight text on a technical page and click `Explain`.
+Follow the steps in **Quickstart (Local)** above. The key command to start the backend is `npm run dev`.
 
 ## Smoke Check
 
