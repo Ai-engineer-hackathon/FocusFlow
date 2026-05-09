@@ -20,19 +20,17 @@ async function fetchWithFallback(apiBase, paths, init) {
 function extractSseEvents(raw) {
   const events = [];
   for (const frame of raw.split("\n\n")) {
-    const lines = frame.split("\n").map((l) => l.trimEnd());
-    const eventLine = lines.find((line) => line.startsWith("event: "));
-    const dataLines = lines.filter((line) => line.startsWith("data: "));
-    if (dataLines.length === 0) continue;
+    const eventLine = frame.split("\n").find((line) => line.startsWith("event: "));
+    const dataLine = frame.split("\n").find((line) => line.startsWith("data: "));
+    if (!dataLine) continue;
 
     const event = eventLine ? eventLine.slice(7).trim() : "message";
-    const dataRaw = dataLines.map((l) => l.slice(6)).join("\n").trim();
 
     try {
-      const parsed = JSON.parse(dataRaw);
+      const parsed = JSON.parse(dataLine.slice(6));
       events.push({ event, data: parsed });
     } catch {
-      events.push({ event, data: dataRaw });
+      // Ignore incomplete frames; the next network chunk may complete them.
     }
   }
   return events;
@@ -57,7 +55,6 @@ async function streamPrimerToTab({
       await chrome.tabs.sendMessage(tabId, { type: "PRIMER_CHUNK", requestId, chunk });
       await new Promise((r) => setTimeout(r, 35));
     }
-    await chrome.tabs.sendMessage(tabId, { type: "PRIMER_PROSE_DONE", requestId });
     await chrome.tabs.sendMessage(tabId, { type: "PRIMER_DONE", requestId });
     return;
   }
@@ -90,7 +87,6 @@ async function streamPrimerToTab({
   if (!reader) {
     const text = await res.text();
     await chrome.tabs.sendMessage(tabId, { type: "PRIMER_CHUNK", requestId, chunk: text });
-    await chrome.tabs.sendMessage(tabId, { type: "PRIMER_PROSE_DONE", requestId });
     await chrome.tabs.sendMessage(tabId, { type: "PRIMER_DONE", requestId });
     return;
   }
@@ -98,32 +94,11 @@ async function streamPrimerToTab({
   const decoder = new TextDecoder();
   let sseBuffer = "";
   const isSse = (res.headers.get("content-type") || "").includes("text/event-stream");
-  let proseDoneSent = false;
-  let prereqsSent = false;
-  let idleTimer = null;
-
-  const kickIdleTimeout = async () => {
-    if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = setTimeout(async () => {
-      // If backend stalls after prose, don't leave UI stuck.
-      if (!proseDoneSent) {
-        proseDoneSent = true;
-        await chrome.tabs.sendMessage(tabId, { type: "PRIMER_PROSE_DONE", requestId });
-      }
-      if (!prereqsSent) {
-        prereqsSent = true;
-        await chrome.tabs.sendMessage(tabId, { type: "PRIMER_PREREQUISITES", requestId, items: [] });
-      }
-    }, 6000);
-  };
-
-  await kickIdleTimeout();
 
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
     const chunk = decoder.decode(value, { stream: true });
-    await kickIdleTimeout();
 
     if (!isSse) {
       await chrome.tabs.sendMessage(tabId, { type: "PRIMER_CHUNK", requestId, chunk });
@@ -134,53 +109,24 @@ async function streamPrimerToTab({
     const parts = sseBuffer.split("\n\n");
     sseBuffer = parts.pop() || "";
     for (const event of extractSseEvents(parts.join("\n\n"))) {
-      const eventName = String(event.event || "").trim().toLowerCase();
-
-      if (eventName === "delta") {
-        const deltaText = typeof event.data === "string" ? event.data : event.data?.text;
-        if (!deltaText) continue;
+      if (event.event === "delta" && event.data?.text) {
         await chrome.tabs.sendMessage(tabId, {
           type: "PRIMER_CHUNK",
           requestId,
-          chunk: deltaText,
+          chunk: event.data.text,
         });
       }
-      if (eventName === "prose_done") {
-        proseDoneSent = true;
+      if (event.event === "prose_done") {
         await chrome.tabs.sendMessage(tabId, { type: "PRIMER_PROSE_DONE", requestId });
       }
-      if (eventName === "prerequisites") {
-        const items =
-          typeof event.data === "object" && event.data
-            ? event.data.items
-            : typeof event.data === "string"
-              ? (() => {
-                  try {
-                    const parsed = JSON.parse(event.data);
-                    return parsed?.items;
-                  } catch {
-                    return null;
-                  }
-                })()
-              : null;
+      if (event.event === "prerequisites") {
         await chrome.tabs.sendMessage(tabId, {
           type: "PRIMER_PREREQUISITES",
           requestId,
-          items: Array.isArray(items) ? items : [],
+          items: Array.isArray(event.data?.items) ? event.data.items : [],
         });
-        prereqsSent = true;
       }
     }
-  }
-  if (idleTimer) clearTimeout(idleTimer);
-
-  // Some backends never send prose_done; still trigger prerequisite loading UI after prose completes.
-  if (!proseDoneSent) {
-    await chrome.tabs.sendMessage(tabId, { type: "PRIMER_PROSE_DONE", requestId });
-  }
-  // Some backends never send prerequisites; complete the prereq section with an empty array.
-  if (!prereqsSent) {
-    await chrome.tabs.sendMessage(tabId, { type: "PRIMER_PREREQUISITES", requestId, items: [] });
   }
   await chrome.tabs.sendMessage(tabId, { type: "PRIMER_DONE", requestId });
 }
@@ -219,6 +165,56 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         nextParagraph: request.nextParagraph,
         codeContext: request.codeContext,
       });
+      return;
+    }
+
+    if (request.type === "GET_PREREQUISITES") {
+      const tabId = sender.tab?.id;
+      if (!tabId) {
+        sendResponse({ ok: false, error: "Missing sender tab" });
+        return;
+      }
+
+      const apiBase = await getApiBase();
+      const res = await fetchWithFallback(apiBase, ["/prerequisites", "/api/prerequisites"], {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          selectedText: request.selectedText,
+          url: request.url,
+          title: request.title,
+          previousParagraph: request.previousParagraph,
+          paragraph: request.paragraph,
+          nextParagraph: request.nextParagraph,
+          codeContext: request.codeContext,
+        }),
+      });
+
+      if (!res.ok) {
+        // Never break prose; just report empty prerequisites.
+        await chrome.tabs.sendMessage(tabId, {
+          type: "PRIMER_PREREQUISITES",
+          requestId: request.requestId,
+          items: [],
+        });
+        sendResponse({ ok: true });
+        return;
+      }
+
+      let data = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
+      const items = coercePrereqItems(data) || [];
+
+      await chrome.tabs.sendMessage(tabId, {
+        type: "PRIMER_PREREQUISITES",
+        requestId: request.requestId,
+        items: Array.isArray(items) ? items : [],
+      });
+      sendResponse({ ok: true });
       return;
     }
   })().catch((err) => {

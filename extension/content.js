@@ -9,6 +9,7 @@ let activeRequestId = null;
 let activePanelState = null;
 let activePrimerListener = null;
 let prereqTimeout = null;
+let prereqRequestedForRequestId = null;
 
 function createEl(tag, className, text) {
   const el = document.createElement(tag);
@@ -160,6 +161,7 @@ function removePrimerPanel() {
   primerPanel = null;
   activeRequestId = null;
   activePanelState = null;
+  prereqRequestedForRequestId = null;
 }
 
 function makePanelDraggable(panel, handle) {
@@ -195,6 +197,7 @@ function makePanelDraggable(panel, handle) {
 
 function requestPrimer(details, status, body, spinner) {
   activeRequestId = crypto.randomUUID();
+  prereqRequestedForRequestId = null;
   body.dataset.rawText = "";
   body.replaceChildren();
   activePanelState.prereqWrap.replaceChildren();
@@ -218,6 +221,29 @@ function requestPrimer(details, status, body, spinner) {
         status.textContent = resp?.error || "Failed to start primer.";
         spinner.style.display = "none";
       }
+    },
+  );
+}
+
+function requestPrerequisites(details) {
+  if (!activePanelState || !activeRequestId) return;
+  if (prereqRequestedForRequestId === activeRequestId) return;
+  prereqRequestedForRequestId = activeRequestId;
+
+  chrome.runtime.sendMessage(
+    {
+      type: "GET_PREREQUISITES",
+      requestId: activeRequestId,
+      selectedText: details.selectedText,
+      title: document.title,
+      url: location.href,
+      previousParagraph: details.previousParagraph,
+      paragraph: details.paragraph,
+      nextParagraph: details.nextParagraph,
+      codeContext: details.codeContext,
+    },
+    () => {
+      // Never block prose on prerequisite fetching.
     },
   );
 }
@@ -262,6 +288,7 @@ function renderPrerequisites(items) {
         ...state.currentDetails,
         selectedText: item.concept,
       };
+      prereqRequestedForRequestId = null;
       state.path = [...state.path, item.concept];
       state.prerequisites = [];
       state.selected.textContent = item.concept;
@@ -276,7 +303,6 @@ function renderPrerequisiteLoading() {
   const state = activePanelState;
   if (!state) return;
   state.prereqWrap.replaceChildren();
-  state.prereqLoading = true;
   const row = createEl("div", "ff-prereq__loading");
   row.append(createEl("span", "ff-prereq__spinner"));
   row.append(createEl("span", "", "Finding prerequisites..."));
@@ -285,9 +311,7 @@ function renderPrerequisiteLoading() {
   if (prereqTimeout) window.clearTimeout(prereqTimeout);
   prereqTimeout = window.setTimeout(() => {
     if (!activePanelState || activePanelState !== state) return;
-    if (!state.prereqLoading) return;
     state.prereqWrap.replaceChildren();
-    state.prereqLoading = false;
   }, 8000);
 }
 
@@ -297,6 +321,7 @@ function restorePreviousPrimer() {
   if (!state || !previous) return;
 
   activeRequestId = null;
+  prereqRequestedForRequestId = null;
   state.currentDetails = previous.details;
   state.path = previous.path;
   state.prerequisites = previous.prerequisites;
@@ -357,7 +382,6 @@ async function showPrimerPanel(details) {
     path: [details.selectedText],
     currentDetails: details,
     prerequisites: [],
-    prereqLoading: false,
     backBtn,
     breadcrumb,
     selected,
@@ -390,12 +414,12 @@ async function showPrimerPanel(details) {
       status.textContent = "Explanation";
       spinner.style.display = "none";
       renderPrerequisiteLoading();
+      requestPrerequisites(activePanelState.currentDetails);
       return;
     }
     if (msg.type === "PRIMER_PREREQUISITES") {
       if (activePanelState) {
         activePanelState.prerequisites = msg.items || [];
-        activePanelState.prereqLoading = false;
       }
       if (prereqTimeout) {
         window.clearTimeout(prereqTimeout);
@@ -405,10 +429,6 @@ async function showPrimerPanel(details) {
       return;
     }
     if (msg.type === "PRIMER_DONE") {
-      if (activePanelState?.prereqLoading) {
-        activePanelState.prereqWrap.replaceChildren();
-        activePanelState.prereqLoading = false;
-      }
       if (prereqTimeout) {
         window.clearTimeout(prereqTimeout);
         prereqTimeout = null;
@@ -418,10 +438,6 @@ async function showPrimerPanel(details) {
     if (msg.type === "PRIMER_ERROR") {
       status.textContent = msg.error || "Primer failed.";
       spinner.style.display = "none";
-      if (activePanelState?.prereqLoading) {
-        activePanelState.prereqWrap.replaceChildren();
-        activePanelState.prereqLoading = false;
-      }
       if (prereqTimeout) {
         window.clearTimeout(prereqTimeout);
         prereqTimeout = null;
