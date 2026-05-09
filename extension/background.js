@@ -1,41 +1,6 @@
-const DEFAULT_API_BASE = "https://your-vercel-backend.api";
+const DEFAULT_API_BASE = "http://localhost:3000";
 
 const ENABLE_MOCK = false; // Set true to use mocked responses.
-
-function normalizeConceptKey(concept) {
-  return String(concept || "").trim().toLowerCase();
-}
-
-async function getKnownConcepts() {
-  const { ffKnownConcepts = {} } = await chrome.storage.local.get(["ffKnownConcepts"]);
-  return ffKnownConcepts;
-}
-
-async function markConceptKnown(concept) {
-  const key = normalizeConceptKey(concept);
-  if (!key) return;
-  const ffKnownConcepts = await getKnownConcepts();
-  ffKnownConcepts[key] = true;
-  await chrome.storage.local.set({ ffKnownConcepts });
-}
-
-async function analyzePage(paragraphs) {
-  if (ENABLE_MOCK) {
-    return {
-      load_bearing_paragraph_index: Math.min(3, Math.max(0, (paragraphs?.length || 1) - 1)),
-      concepts: ["closures", "dependency array", "stale state"],
-    };
-  }
-
-  const apiBase = await getApiBase();
-  const res = await fetchWithFallback(apiBase, ["/analyze", "/api/analyze"], {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ paragraphs }),
-  });
-  if (!res.ok) throw new Error(`Analyze failed: ${res.status}`);
-  return await res.json();
-}
 
 async function getApiBase() {
   const { ffApiBase } = await chrome.storage.local.get(["ffApiBase"]);
@@ -52,14 +17,40 @@ async function fetchWithFallback(apiBase, paths, init) {
   return lastRes || fetch(`${apiBase}${paths[0]}`, init);
 }
 
-async function streamPrimerToTab({ tabId, requestId, concept, url }) {
+function extractSseEvents(raw) {
+  const events = [];
+  for (const frame of raw.split("\n\n")) {
+    const eventLine = frame.split("\n").find((line) => line.startsWith("event: "));
+    const dataLine = frame.split("\n").find((line) => line.startsWith("data: "));
+    if (!dataLine) continue;
+
+    const event = eventLine ? eventLine.slice(7).trim() : "message";
+
+    try {
+      const parsed = JSON.parse(dataLine.slice(6));
+      events.push({ event, data: parsed });
+    } catch {
+      // Ignore incomplete frames; the next network chunk may complete them.
+    }
+  }
+  return events;
+}
+
+async function streamPrimerToTab({
+  tabId,
+  requestId,
+  selectedText,
+  url,
+  title,
+  previousParagraph,
+  paragraph,
+  nextParagraph,
+  codeContext,
+}) {
   if (ENABLE_MOCK) {
     const mock =
-      `Primer: ${concept}\n\n` +
-      `- What it is: a short definition.\n` +
-      `- Why it matters here: a quick intuition.\n` +
-      `- Mini example: ...\n` +
-      `\n(backend not wired yet; mock streaming)\n`;
+      `Primer for: ${selectedText}\n\n` +
+      `This explains the selected technical text in the context of the surrounding paragraph.\n`;
     for (const chunk of mock.match(/.{1,45}/g) || []) {
       await chrome.tabs.sendMessage(tabId, { type: "PRIMER_CHUNK", requestId, chunk });
       await new Promise((r) => setTimeout(r, 35));
@@ -72,7 +63,15 @@ async function streamPrimerToTab({ tabId, requestId, concept, url }) {
   const res = await fetchWithFallback(apiBase, ["/primer", "/api/primer"], {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ concept, url }),
+    body: JSON.stringify({
+      selectedText,
+      url,
+      title,
+      previousParagraph,
+      paragraph,
+      nextParagraph,
+      codeContext,
+    }),
   });
 
   if (!res.ok) {
@@ -93,11 +92,41 @@ async function streamPrimerToTab({ tabId, requestId, concept, url }) {
   }
 
   const decoder = new TextDecoder();
+  let sseBuffer = "";
+  const isSse = (res.headers.get("content-type") || "").includes("text/event-stream");
+
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
     const chunk = decoder.decode(value, { stream: true });
-    await chrome.tabs.sendMessage(tabId, { type: "PRIMER_CHUNK", requestId, chunk });
+
+    if (!isSse) {
+      await chrome.tabs.sendMessage(tabId, { type: "PRIMER_CHUNK", requestId, chunk });
+      continue;
+    }
+
+    sseBuffer += chunk;
+    const parts = sseBuffer.split("\n\n");
+    sseBuffer = parts.pop() || "";
+    for (const event of extractSseEvents(parts.join("\n\n"))) {
+      if (event.event === "delta" && event.data?.text) {
+        await chrome.tabs.sendMessage(tabId, {
+          type: "PRIMER_CHUNK",
+          requestId,
+          chunk: event.data.text,
+        });
+      }
+      if (event.event === "prose_done") {
+        await chrome.tabs.sendMessage(tabId, { type: "PRIMER_PROSE_DONE", requestId });
+      }
+      if (event.event === "prerequisites") {
+        await chrome.tabs.sendMessage(tabId, {
+          type: "PRIMER_PREREQUISITES",
+          requestId,
+          items: Array.isArray(event.data?.items) ? event.data.items : [],
+        });
+      }
+    }
   }
   await chrome.tabs.sendMessage(tabId, { type: "PRIMER_DONE", requestId });
 }
@@ -105,26 +134,6 @@ async function streamPrimerToTab({ tabId, requestId, concept, url }) {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   (async () => {
     if (!request || !request.type) return;
-
-    if (request.type === "ANALYZE_PAGE") {
-      const paragraphs = Array.isArray(request.paragraphs) ? request.paragraphs : [];
-      const analysis = await analyzePage(paragraphs);
-
-      const known = await getKnownConcepts();
-      const concepts = (analysis.concepts || []).filter((c) => !known[normalizeConceptKey(c)]);
-
-      sendResponse({
-        load_bearing_paragraph_index: analysis.load_bearing_paragraph_index ?? 0,
-        concepts,
-      });
-      return;
-    }
-
-    if (request.type === "MARK_KNOWN") {
-      await markConceptKnown(request.concept);
-      sendResponse({ ok: true });
-      return;
-    }
 
     if (request.type === "SET_API_BASE") {
       const apiBase = String(request.apiBase || "").trim();
@@ -148,8 +157,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       await streamPrimerToTab({
         tabId,
         requestId,
-        concept: request.concept,
+        selectedText: request.selectedText,
         url: request.url,
+        title: request.title,
+        previousParagraph: request.previousParagraph,
+        paragraph: request.paragraph,
+        nextParagraph: request.nextParagraph,
+        codeContext: request.codeContext,
       });
       return;
     }

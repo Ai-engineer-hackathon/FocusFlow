@@ -56,7 +56,7 @@ async function main() {
   }
 
   const primerRes = makeRes();
-  await primer(makeReq({ concept: "closures" }), primerRes);
+  await primer(makeReq({}), primerRes);
 
   if (primerRes.statusCode !== 400 || !primerRes.body.includes("missing_input")) {
     throw new Error("Expected validation error from primer endpoint.");

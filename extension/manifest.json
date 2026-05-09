@@ -3,7 +3,7 @@
   "name": "FocusFlow",
   "version": "1.0.0",
   "permissions": ["storage", "activeTab", "scripting", "sidePanel"],
-  "host_permissions": ["https://*/*"],
+  "host_permissions": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
   "action": { "default_popup": "popup.html" },
   "side_panel": { "default_path": "popup.html" },
   "content_scripts": [

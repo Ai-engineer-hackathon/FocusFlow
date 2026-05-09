@@ -1,9 +1,8 @@
 /**
  * Local HTTP API for extension integration testing.
  *
- * Endpoints (contract must match the extension contract):
- * - POST /api/analyze  { paragraphs: string[] } -> { load_bearing_paragraph_index: number, concepts: string[] }
- * - POST /api/primer   { concept: string, url?: string } -> streamed plain text (or non-streamed fallback)
+ * Endpoint:
+ * - POST /api/primer { selectedText: string, paragraph?: string, codeContext?: string[] } -> streamed plain text
  *
  * Usage (PowerShell):
  *   $env:OPENAI_API_KEY="sk-..."; node extension/dev/local-api.js
@@ -13,9 +12,29 @@
  */
 
 const http = require("node:http");
+const fs = require("node:fs");
+const path = require("node:path");
 const { URL } = require("node:url");
 
 const PORT = Number(process.env.PORT || 8787);
+const ROOT = path.resolve(__dirname, "..", "..");
+const MODEL = process.env.FOCUSFLOW_LOCAL_MODEL || "gpt-4o-mini";
+
+function loadEnv() {
+  const envPath = path.join(ROOT, ".env");
+  if (!fs.existsSync(envPath)) return;
+
+  for (const line of fs.readFileSync(envPath, "utf8").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const equals = trimmed.indexOf("=");
+    if (equals === -1) continue;
+
+    const key = trimmed.slice(0, equals).trim();
+    const value = trimmed.slice(equals + 1).trim().replace(/^["']|["']$/g, "");
+    if (key && process.env[key] === undefined) process.env[key] = value;
+  }
+}
 
 function setCors(res) {
   res.setHeader("access-control-allow-origin", "*");
@@ -61,30 +80,9 @@ function requireKey(res) {
   return false;
 }
 
-async function openaiChatJson({ model, messages }) {
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      messages,
-      response_format: { type: "json_object" },
-      temperature: 0.2,
-    }),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text().catch(() => "");
-    throw new Error(`OpenAI error ${res.status}: ${errText}`);
-  }
-
-  const data = await res.json();
-  const content = data?.choices?.[0]?.message?.content;
-  if (!content) throw new Error("OpenAI returned empty content");
-  return JSON.parse(content);
+function sse(res, event, data) {
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
 async function openaiStreamText({ model, messages, onChunk }) {
@@ -141,11 +139,6 @@ async function openaiStreamText({ model, messages, onChunk }) {
   }
 }
 
-function clampIndex(idx, len) {
-  if (!Number.isFinite(idx)) return 0;
-  return Math.max(0, Math.min(len - 1, Math.floor(idx)));
-}
-
 const server = http.createServer(async (req, res) => {
   try {
     setCors(res);
@@ -157,61 +150,52 @@ const server = http.createServer(async (req, res) => {
 
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
 
-    if (req.method === "POST" && url.pathname === "/api/analyze") {
-      if (!requireKey(res)) return;
-      const body = await readJson(req);
-      const paragraphs = Array.isArray(body.paragraphs) ? body.paragraphs : [];
-
-      const prompt = [
-        {
-          role: "system",
-          content:
-            "You analyze a technical tutorial and identify prerequisite concepts the author assumes without explaining. " +
-            "Return JSON ONLY with keys: load_bearing_paragraph_index (number), concepts (string array). " +
-            "load_bearing_paragraph_index should be the earliest paragraph index (0-based) where understanding depends on the concepts.",
-        },
-        {
-          role: "user",
-          content:
-            "Paragraphs (0-based index):\n" +
-            paragraphs.map((p, i) => `[${i}] ${String(p || "").slice(0, 1200)}`).join("\n\n"),
-        },
-      ];
-
-      const out = await openaiChatJson({ model: "gpt-4o-mini", messages: prompt });
-      const concepts = Array.isArray(out.concepts) ? out.concepts.map(String) : [];
-      const loadIdx = clampIndex(out.load_bearing_paragraph_index, Math.max(1, paragraphs.length));
-
-      json(res, 200, { load_bearing_paragraph_index: loadIdx, concepts });
-      return;
-    }
-
     if (req.method === "POST" && url.pathname === "/api/primer") {
       if (!requireKey(res)) return;
       const body = await readJson(req);
-      const concept = String(body.concept || "").trim();
+      const selectedText = String(body.selectedText || body.concept || "").trim();
       const pageUrl = String(body.url || "").trim();
+      const title = String(body.title || "").trim();
+      const previousParagraph = String(body.previousParagraph || "").trim();
+      const paragraph = String(body.paragraph || "").trim();
+      const nextParagraph = String(body.nextParagraph || "").trim();
+      const codeContext = Array.isArray(body.codeContext)
+        ? body.codeContext.map((code) => String(code || "").trim()).filter(Boolean).slice(0, 3)
+        : [];
 
       res.statusCode = 200;
-      res.setHeader("content-type", "text/plain; charset=utf-8");
+      res.setHeader("content-type", "text/event-stream; charset=utf-8");
       res.setHeader("transfer-encoding", "chunked");
+      sse(res, "start", { selectedText });
 
       const messages = [
         {
           role: "system",
           content:
-            "Write a concise 60-90 second primer for a developer reading a tutorial article. " +
-            "Make it practical and tailored to the likely context (web dev / JS). Use short paragraphs and one tiny example if helpful.",
+            "Write a concise primer for a developer who highlighted technical text. " +
+            "Explain the selected text in context. If nearby article code is provided, reuse its actual variable names, function names, component names, API names, and code style. " +
+            "Do not invent generic examples using foo, bar, baz, x, y, user, data, or placeholder names unless those names appear in the article code. " +
+            "Do not use markdown code fences. Keep code examples to one plain line, or use inline backticks for short identifiers and expressions. Keep it under 180 words.",
         },
-        { role: "user", content: `Concept: ${concept}\nArticle URL: ${pageUrl}` },
+        {
+          role: "user",
+          content:
+            `Highlighted text:\n${selectedText}\n\n` +
+            `Article title: ${title}\nArticle URL: ${pageUrl}\n\n` +
+            `Previous paragraph:\n${previousParagraph || "(none)"}\n\n` +
+            `Current paragraph:\n${paragraph || "(none)"}\n\n` +
+            `Next paragraph:\n${nextParagraph || "(none)"}\n\n` +
+            `Nearby code from the article:\n${codeContext.length ? codeContext.map((code, index) => `Code ${index + 1}:\n${code}`).join("\n\n") : "(none)"}`,
+        },
       ];
 
       await openaiStreamText({
-        model: "gpt-4o-mini",
+        model: MODEL,
         messages,
-        onChunk: (chunk) => res.write(chunk),
+        onChunk: (chunk) => sse(res, "delta", { text: chunk }),
       });
 
+      sse(res, "done", {});
       res.end();
       return;
     }
@@ -221,6 +205,8 @@ const server = http.createServer(async (req, res) => {
     json(res, 500, { error: String(err?.message || err) });
   }
 });
+
+loadEnv();
 
 server.listen(PORT, () => {
   // eslint-disable-next-line no-console

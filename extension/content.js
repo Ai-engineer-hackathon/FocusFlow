@@ -1,103 +1,13 @@
 const FF = {
-  dwellThresholdMs: 30_000,
-  minParagraphChars: 60,
-  maxConceptBannersPerPage: 3,
+  selectionMinChars: 3,
+  selectionMaxChars: 1200,
 };
 
-function normalizeConceptKey(concept) {
-  return String(concept || "").trim().toLowerCase();
-}
-
-function getReadableRoot() {
-  return (
-    document.querySelector("article") ||
-    document.querySelector("main") ||
-    document.querySelector("[role='main']") ||
-    document.body
-  );
-}
-
-function isElementVisible(el) {
-  const style = window.getComputedStyle(el);
-  if (!style || style.display === "none" || style.visibility === "hidden") return false;
-  const rect = el.getBoundingClientRect();
-  return rect.height > 0 && rect.width > 0;
-}
-
-function getCandidateParagraphElements() {
-  const root = getReadableRoot();
-  const els = Array.from(root.querySelectorAll("p"));
-  return els
-    .filter((p) => isElementVisible(p))
-    .filter((p) => (p.innerText || "").trim().length >= FF.minParagraphChars);
-}
-
-function extractParagraphTexts(paragraphEls) {
-  return paragraphEls.map((p) => (p.innerText || "").replace(/\s+/g, " ").trim());
-}
-
-function maybeReadabilityText() {
-  try {
-    if (!window.Readability) return null;
-    const clone = document.cloneNode(true);
-    const parsed = new window.Readability(clone).parse();
-    return parsed?.textContent || null;
-  } catch {
-    return null;
-  }
-}
-
-function setupDwellTracking(paragraphEls) {
-  const inViewSince = new Map();
-  const fired = new Set();
-
-  const observer = new IntersectionObserver(
-    (entries) => {
-      const now = Date.now();
-      for (const entry of entries) {
-        const idx = Number(entry.target?.dataset?.ffParagraphIndex);
-        if (!Number.isFinite(idx)) continue;
-
-        if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
-          if (!inViewSince.has(idx)) inViewSince.set(idx, now);
-          const start = inViewSince.get(idx);
-          if (!fired.has(idx) && start && now - start > FF.dwellThresholdMs) {
-            fired.add(idx);
-            nudgeOnDwell(idx, paragraphEls);
-          }
-        } else {
-          inViewSince.delete(idx);
-        }
-      }
-    },
-    { threshold: [0.6] },
-  );
-
-  paragraphEls.forEach((p, idx) => {
-    p.dataset.ffParagraphIndex = String(idx);
-    observer.observe(p);
-  });
-}
-
-function nudgeOnDwell(paragraphIndex, paragraphEls) {
-  const anchor = paragraphEls[paragraphIndex];
-  if (!anchor) return;
-
-  const existing = anchor.parentElement?.querySelector(
-    `.ff-gap-banner[data-ff-anchor-index="${paragraphIndex}"]`,
-  );
-  if (existing) {
-    existing.style.borderLeftColor = "rgba(37, 99, 235, 0.75)";
-    const subtitle = existing.querySelector(".ff-gap-banner__subtitle");
-    if (subtitle) subtitle.textContent = "Looks dense. Want that 90-second primer now?";
-    return;
-  }
-
-  injectBanner(paragraphIndex, "this concept", paragraphEls, {
-    subtitleOverride: "Looks dense. Want a 90-second primer before continuing?",
-    hideKnowButton: true,
-  });
-}
+let selectionButton = null;
+let primerPanel = null;
+let activeRequestId = null;
+let activePanelState = null;
+let activePrimerListener = null;
 
 function createEl(tag, className, text) {
   const el = document.createElement(tag);
@@ -106,158 +16,403 @@ function createEl(tag, className, text) {
   return el;
 }
 
-function injectBanner(paragraphIndex, concept, paragraphEls, opts = {}) {
-  const anchor = paragraphEls[paragraphIndex];
-  if (!anchor) return;
+function renderPrimerText(el, rawText) {
+  const cleaned = rawText
+    .replace(/```[a-zA-Z0-9_-]*\n?/g, "")
+    .replace(/```/g, "");
+  const parts = cleaned.split(/(`[^`]+`)/g);
 
-  const conceptKey = normalizeConceptKey(concept);
-  const existingSame = anchor.parentElement?.querySelector(
-    `.ff-gap-banner[data-ff-anchor-index="${paragraphIndex}"][data-ff-concept-key="${conceptKey}"]`,
-  );
-  if (existingSame) return;
-
-  anchor.classList.add("ff-gap-highlight");
-
-  const banner = createEl("div", "ff-gap-banner");
-  banner.dataset.ffAnchorIndex = String(paragraphIndex);
-  banner.dataset.ffConcept = concept;
-  banner.dataset.ffConceptKey = conceptKey;
-
-  const row = createEl("div", "ff-gap-banner__row");
-  const left = createEl("div");
-  const title = createEl("div", "ff-gap-banner__title", "Quick nudge");
-  const subtitle = createEl("div", "ff-gap-banner__subtitle");
-  if (opts.subtitleOverride) {
-    subtitle.textContent = opts.subtitleOverride;
-  } else {
-    subtitle.innerHTML = `This paragraph leans on <span class="ff-gap-banner__concept"></span>. Want a 30s primer?`;
-    subtitle.querySelector(".ff-gap-banner__concept").textContent = concept;
+  el.replaceChildren();
+  for (const part of parts) {
+    if (part.startsWith("`") && part.endsWith("`") && part.length > 2) {
+      el.append(createEl("code", "ff-inline-code", part.slice(1, -1)));
+    } else {
+      el.append(document.createTextNode(part));
+    }
   }
-  left.append(title, subtitle);
-
-  const actions = createEl("div", "ff-gap-banner__actions");
-  const showPrimerBtn = createEl("button", "ff-gap-banner__btn ff-gap-banner__btn--primary", "Show Primer");
-  showPrimerBtn.type = "button";
-  actions.append(showPrimerBtn);
-  let knowBtn = null;
-  if (!opts.hideKnowButton) {
-    knowBtn = createEl("button", "ff-gap-banner__btn", "I know this");
-    knowBtn.type = "button";
-    actions.append(knowBtn);
-  }
-
-  row.append(left, actions);
-
-  const primer = createEl("div", "ff-gap-banner__primer");
-  primer.hidden = true;
-
-  const primerMeta = createEl("div", "ff-gap-banner__primerMeta");
-  const status = createEl("div", "ff-gap-banner__status", "Loading primer…");
-  const spinner = createEl("div", "ff-gap-banner__spinner");
-  primerMeta.append(status, spinner);
-
-  const primerText = createEl("div", "ff-gap-banner__primerText", "");
-  primer.append(primerMeta, primerText);
-
-  banner.append(row, primer);
-
-  const parent = anchor.parentElement;
-  if (!parent) return;
-  parent.insertBefore(banner, anchor);
-
-  const requestId = crypto.randomUUID();
-  let primerRequested = false;
-
-  showPrimerBtn.addEventListener("click", () => {
-    primer.hidden = !primer.hidden;
-    if (primer.hidden) {
-      showPrimerBtn.textContent = "Show Primer";
-      return;
-    }
-    showPrimerBtn.textContent = "Hide Primer";
-
-    if (primerRequested) return;
-    primerRequested = true;
-
-    chrome.runtime.sendMessage(
-      { type: "GET_PRIMER", requestId, concept, url: location.href },
-      (resp) => {
-        if (!resp?.ok) {
-          status.textContent = resp?.error || "Failed to start primer.";
-          spinner.remove();
-          return;
-        }
-      },
-    );
-  });
-
-  if (knowBtn) {
-    knowBtn.addEventListener("click", () => {
-      chrome.runtime.sendMessage({ type: "MARK_KNOWN", concept });
-      banner.remove();
-      const hasMoreBanners = !!anchor.parentElement?.querySelector(
-        `.ff-gap-banner[data-ff-anchor-index="${paragraphIndex}"]`,
-      );
-      if (!hasMoreBanners) anchor.classList.remove("ff-gap-highlight");
-    });
-  }
-
-  const onPrimerMessage = (msg) => {
-    if (!msg || msg.requestId !== requestId) return;
-    if (msg.type === "PRIMER_CHUNK") {
-      primerText.textContent += msg.chunk;
-      status.textContent = "Primer";
-      return;
-    }
-    if (msg.type === "PRIMER_DONE") {
-      status.textContent = "Primer";
-      spinner.remove();
-      chrome.runtime.onMessage.removeListener(onPrimerMessage);
-      return;
-    }
-    if (msg.type === "PRIMER_ERROR") {
-      status.textContent = msg.error || "Primer failed.";
-      spinner.remove();
-      chrome.runtime.onMessage.removeListener(onPrimerMessage);
-    }
-  };
-
-  chrome.runtime.onMessage.addListener(onPrimerMessage);
 }
 
-async function analyzeAndInject() {
-  const paragraphEls = getCandidateParagraphElements();
-  if (!paragraphEls.length) return;
+function compactText(value, maxLength) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
 
-  setupDwellTracking(paragraphEls);
+function getReadableBlocks() {
+  const root =
+    document.querySelector("article") ||
+    document.querySelector("main") ||
+    document.querySelector("[role='main']") ||
+    document.body;
 
-  const paragraphs = extractParagraphTexts(paragraphEls);
-  const readabilityText = maybeReadabilityText();
-  if (readabilityText && readabilityText.length > 200) {
-    // Keep the contract stable; extra context can be useful later if backend supports it.
-    // For now, we only send paragraphs as specified.
+  return Array.from(root.querySelectorAll("p, li, blockquote, pre"))
+    .map((el) => ({
+      el,
+      text: compactText(el.innerText, 1800),
+    }))
+    .filter((block) => block.text.length >= 20);
+}
+
+function getNearbyCodeContext(container) {
+  const root =
+    document.querySelector("article") ||
+    document.querySelector("main") ||
+    document.querySelector("[role='main']") ||
+    document.body;
+  const codeBlocks = Array.from(root.querySelectorAll("pre, code"))
+    .map((el) => ({
+      el,
+      text: String(el.innerText || el.textContent || "").trim(),
+    }))
+    .filter((block) => block.text.length >= 12);
+
+  if (!codeBlocks.length) return [];
+
+  const selectedEl = container?.nodeType === Node.ELEMENT_NODE ? container : container?.parentElement;
+  const selectedTop = selectedEl?.getBoundingClientRect?.().top ?? 0;
+
+  return codeBlocks
+    .map((block) => ({
+      text: block.text.slice(0, 1800),
+      distance: Math.abs((block.el.getBoundingClientRect?.().top ?? 0) - selectedTop),
+    }))
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, 3)
+    .map((block) => block.text);
+}
+
+function getSelectionContext(container, selectedText) {
+  const selectedBlock = container?.closest?.("p, li, blockquote, pre");
+  const blocks = getReadableBlocks();
+  const index = selectedBlock ? blocks.findIndex((block) => block.el === selectedBlock) : -1;
+  const paragraph = compactText(selectedBlock?.innerText, 1800) || selectedText;
+
+  return {
+    previousParagraph: index > 0 ? blocks[index - 1].text : "",
+    paragraph,
+    nextParagraph: index >= 0 && index < blocks.length - 1 ? blocks[index + 1].text : "",
+    codeContext: getNearbyCodeContext(container),
+  };
+}
+
+function getSelectionDetails() {
+  const selection = window.getSelection();
+  const selectedText = compactText(selection?.toString(), FF.selectionMaxChars);
+  if (!selection || selectedText.length < FF.selectionMinChars || selection.rangeCount === 0) {
+    return null;
   }
 
+  const range = selection.getRangeAt(0);
+  const rect = range.getBoundingClientRect();
+  if (!rect || rect.width === 0 || rect.height === 0) return null;
+
+  const container =
+    range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE
+      ? range.commonAncestorContainer
+      : range.commonAncestorContainer.parentElement;
+  const context = getSelectionContext(container, selectedText);
+
+  return {
+    selectedText,
+    ...context,
+    rect,
+  };
+}
+
+function positionFloatingEl(el, rect, opts = {}) {
+  const gap = opts.gap ?? 10;
+  const viewportTop = window.scrollY;
+  const viewportBottom = window.scrollY + document.documentElement.clientHeight;
+  const viewportRight = window.scrollX + document.documentElement.clientWidth;
+  const top = Math.max(
+    viewportTop + 8,
+    Math.min(window.scrollY + rect.top - el.offsetHeight - gap, viewportBottom - el.offsetHeight - 8),
+  );
+  const left = Math.max(
+    window.scrollX + 8,
+    Math.min(
+      window.scrollX + rect.left + (rect.width - el.offsetWidth) / 2,
+      viewportRight - el.offsetWidth - 8,
+    ),
+  );
+
+  el.style.top = `${top}px`;
+  el.style.left = `${left}px`;
+}
+
+function removeSelectionButton() {
+  selectionButton?.remove();
+  selectionButton = null;
+}
+
+function removePrimerPanel() {
+  if (activePrimerListener) {
+    chrome.runtime.onMessage.removeListener(activePrimerListener);
+    activePrimerListener = null;
+  }
+  primerPanel?.remove();
+  primerPanel = null;
+  activeRequestId = null;
+  activePanelState = null;
+}
+
+function makePanelDraggable(panel, handle) {
+  let drag = null;
+
+  handle.addEventListener("mousedown", (event) => {
+    if (event.target.closest("button")) return;
+    const rect = panel.getBoundingClientRect();
+    drag = {
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+    };
+    panel.classList.add("ff-primer-panel--dragging");
+    event.preventDefault();
+  });
+
+  document.addEventListener("mousemove", (event) => {
+    if (!drag) return;
+    const maxLeft = window.scrollX + document.documentElement.clientWidth - panel.offsetWidth - 8;
+    const maxTop = window.scrollY + document.documentElement.clientHeight - panel.offsetHeight - 8;
+    const left = Math.max(window.scrollX + 8, Math.min(window.scrollX + event.clientX - drag.offsetX, maxLeft));
+    const top = Math.max(window.scrollY + 8, Math.min(window.scrollY + event.clientY - drag.offsetY, maxTop));
+    panel.style.left = `${left}px`;
+    panel.style.top = `${top}px`;
+  });
+
+  document.addEventListener("mouseup", () => {
+    if (!drag) return;
+    drag = null;
+    panel.classList.remove("ff-primer-panel--dragging");
+  });
+}
+
+function requestPrimer(details, status, body, spinner) {
+  activeRequestId = crypto.randomUUID();
+  body.dataset.rawText = "";
+  body.replaceChildren();
+  activePanelState.prereqWrap.replaceChildren();
+  spinner.style.display = "";
+  status.textContent = "Generating...";
+
   chrome.runtime.sendMessage(
-    { type: "ANALYZE_PAGE", paragraphs, url: location.href },
+    {
+      type: "GET_PRIMER",
+      requestId: activeRequestId,
+      selectedText: details.selectedText,
+      title: document.title,
+      url: location.href,
+      previousParagraph: details.previousParagraph,
+      paragraph: details.paragraph,
+      nextParagraph: details.nextParagraph,
+      codeContext: details.codeContext,
+    },
     (resp) => {
-      if (!resp || !Array.isArray(resp.concepts) || resp.concepts.length === 0) return;
-      const idx = Math.max(0, Math.min(paragraphEls.length - 1, resp.load_bearing_paragraph_index ?? 0));
-
-      const concepts = resp.concepts
-        .map((c) => String(c || "").trim())
-        .filter(Boolean)
-        .slice(0, FF.maxConceptBannersPerPage);
-
-      for (const concept of concepts) {
-        injectBanner(idx, concept, paragraphEls);
+      if (!resp?.ok) {
+        status.textContent = resp?.error || "Failed to start primer.";
+        spinner.style.display = "none";
       }
     },
   );
 }
 
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", analyzeAndInject, { once: true });
-} else {
-  analyzeAndInject();
+function renderBreadcrumb(pathEl, path) {
+  pathEl.replaceChildren();
+  pathEl.hidden = !Array.isArray(path) || path.length <= 1;
+  if (pathEl.hidden) return;
+
+  pathEl.append(createEl("span", "ff-breadcrumb__label", "Path:"));
+  path.forEach((label, index) => {
+    if (index > 0) pathEl.append(createEl("span", "ff-breadcrumb__sep", "/"));
+    pathEl.append(createEl("span", "ff-breadcrumb__item", label));
+  });
 }
+
+function renderPrerequisites(items) {
+  const state = activePanelState;
+  if (!state) return;
+  state.prereqWrap.replaceChildren();
+  if (!Array.isArray(items) || items.length === 0) return;
+
+  const title = createEl("div", "ff-prereq__title", "Builds on");
+  const chips = createEl("div", "ff-prereq__chips");
+  state.prereqWrap.append(title, chips);
+
+  for (const item of items.slice(0, 4)) {
+    const chip = createEl("button", "ff-prereq__chip");
+    chip.type = "button";
+    chip.title = item.oneLiner || item.concept;
+    chip.append(createEl("span", "ff-prereq__chipText", item.concept));
+    chips.append(chip);
+
+    chip.addEventListener("click", () => {
+      state.stack.push({
+        details: state.currentDetails,
+        path: [...state.path],
+        rawText: state.body.dataset.rawText || "",
+        prerequisites: state.prerequisites || [],
+      });
+      state.currentDetails = {
+        ...state.currentDetails,
+        selectedText: item.concept,
+      };
+      state.path = [...state.path, item.concept];
+      state.prerequisites = [];
+      state.selected.textContent = item.concept;
+      state.backBtn.hidden = state.stack.length === 0;
+      renderBreadcrumb(state.breadcrumb, state.path);
+      requestPrimer(state.currentDetails, state.status, state.body, state.spinner);
+    });
+  }
+}
+
+function renderPrerequisiteLoading() {
+  const state = activePanelState;
+  if (!state) return;
+  state.prereqWrap.replaceChildren();
+  const row = createEl("div", "ff-prereq__loading");
+  row.append(createEl("span", "ff-prereq__spinner"));
+  row.append(createEl("span", "", "Finding prerequisites..."));
+  state.prereqWrap.append(row);
+}
+
+function restorePreviousPrimer() {
+  const state = activePanelState;
+  const previous = state?.stack.pop();
+  if (!state || !previous) return;
+
+  activeRequestId = null;
+  state.currentDetails = previous.details;
+  state.path = previous.path;
+  state.prerequisites = previous.prerequisites;
+  state.selected.textContent = previous.details.selectedText;
+  state.body.dataset.rawText = previous.rawText;
+  renderPrimerText(state.body, previous.rawText);
+  state.status.textContent = "Explanation";
+  state.spinner.style.display = "none";
+  state.backBtn.hidden = state.stack.length === 0;
+  renderBreadcrumb(state.breadcrumb, state.path);
+  renderPrerequisites(previous.prerequisites);
+}
+
+function showSelectionButton(details) {
+  removeSelectionButton();
+
+  selectionButton = createEl("button", "ff-selection-button", "Explain");
+  selectionButton.type = "button";
+  document.documentElement.append(selectionButton);
+  positionFloatingEl(selectionButton, details.rect, { gap: 12 });
+
+  selectionButton.addEventListener("mousedown", (event) => event.preventDefault());
+  selectionButton.addEventListener("click", () => {
+    showPrimerPanel(details);
+  });
+}
+
+async function showPrimerPanel(details) {
+  removeSelectionButton();
+  removePrimerPanel();
+
+  primerPanel = createEl("div", "ff-primer-panel");
+  const header = createEl("div", "ff-primer-panel__header");
+  const backBtn = createEl("button", "ff-primer-panel__back", "←");
+  backBtn.type = "button";
+  backBtn.hidden = true;
+  const title = createEl("div", "ff-primer-panel__title", "Primer");
+  const closeBtn = createEl("button", "ff-primer-panel__close", "×");
+  closeBtn.type = "button";
+  header.append(backBtn, title, closeBtn);
+
+  const breadcrumb = createEl("div", "ff-breadcrumb");
+  const selected = createEl("div", "ff-primer-panel__selected", details.selectedText);
+  const status = createEl("div", "ff-primer-panel__status", "Generating...");
+  const body = createEl("div", "ff-primer-panel__body");
+  const prereqWrap = createEl("div", "ff-prereq");
+  const spinner = createEl("div", "ff-gap-banner__spinner");
+  primerPanel.append(header, breadcrumb, selected, status, body, prereqWrap, spinner);
+  document.documentElement.append(primerPanel);
+  positionFloatingEl(primerPanel, details.rect, { preferBelow: true, gap: 14 });
+  makePanelDraggable(primerPanel, header);
+
+  closeBtn.addEventListener("click", removePrimerPanel);
+  backBtn.addEventListener("click", restorePreviousPrimer);
+
+  activePanelState = {
+    stack: [],
+    path: [details.selectedText],
+    currentDetails: details,
+    prerequisites: [],
+    backBtn,
+    breadcrumb,
+    selected,
+    status,
+    body,
+    prereqWrap,
+    spinner,
+  };
+  renderBreadcrumb(breadcrumb, activePanelState.path);
+  requestPrimer(details, status, body, spinner);
+
+  if (activePrimerListener) {
+    chrome.runtime.onMessage.removeListener(activePrimerListener);
+  }
+
+  activePrimerListener = (msg) => {
+    if (!msg || msg.requestId !== activeRequestId) return;
+    if (msg.type === "PRIMER_CHUNK") {
+      body.dataset.rawText = `${body.dataset.rawText || ""}${msg.chunk}`;
+      renderPrimerText(body, body.dataset.rawText);
+      status.textContent = "Explanation";
+      return;
+    }
+    if (msg.type === "PRIMER_DONE") {
+      status.textContent = "Explanation";
+      spinner.style.display = "none";
+      return;
+    }
+    if (msg.type === "PRIMER_PROSE_DONE") {
+      status.textContent = "Explanation";
+      spinner.style.display = "none";
+      renderPrerequisiteLoading();
+      return;
+    }
+    if (msg.type === "PRIMER_PREREQUISITES") {
+      if (activePanelState) {
+        activePanelState.prerequisites = msg.items || [];
+      }
+      renderPrerequisites(msg.items || []);
+      return;
+    }
+    if (msg.type === "PRIMER_ERROR") {
+      status.textContent = msg.error || "Primer failed.";
+      spinner.style.display = "none";
+    }
+  };
+
+  chrome.runtime.onMessage.addListener(activePrimerListener);
+}
+
+function handleSelectionChange() {
+  window.setTimeout(() => {
+    const details = getSelectionDetails();
+    if (!details) {
+      removeSelectionButton();
+      return;
+    }
+    showSelectionButton(details);
+  }, 0);
+}
+
+document.addEventListener("selectionchange", handleSelectionChange);
+document.addEventListener("scroll", removeSelectionButton, { passive: true });
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    removeSelectionButton();
+    removePrimerPanel();
+  }
+});
+document.addEventListener("mousedown", (event) => {
+  if (selectionButton?.contains(event.target) || primerPanel?.contains(event.target)) return;
+  if (!window.getSelection()?.toString()) removePrimerPanel();
+});

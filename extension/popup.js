@@ -1,11 +1,8 @@
 async function load() {
-  const { ffApiBase = "", ffKnownConcepts = {} } = await chrome.storage.local.get([
-    "ffApiBase",
-    "ffKnownConcepts",
-  ]);
+  const { ffApiBase = "" } = await chrome.storage.local.get(["ffApiBase"]);
 
   document.getElementById("apiBase").value = ffApiBase;
-  document.getElementById("status").textContent = `Known concepts: ${Object.keys(ffKnownConcepts).length}`;
+  document.getElementById("status").textContent = "Ready.";
 }
 
 async function saveApiBase() {
@@ -21,11 +18,5 @@ async function saveApiBase() {
   });
 }
 
-async function clearKnown() {
-  await chrome.storage.local.set({ ffKnownConcepts: {} });
-  document.getElementById("status").textContent = "Cleared known concepts.";
-}
-
 document.getElementById("saveApi").addEventListener("click", saveApiBase);
-document.getElementById("clearKnown").addEventListener("click", clearKnown);
 load();

@@ -6,20 +6,18 @@
         label { display: block; font-size: 12px; color: #374151; margin-top: 10px; margin-bottom: 4px; }
         input { width: 100%; padding: 8px 10px; border: 1px solid rgba(0,0,0,0.15); border-radius: 10px; }
         .btn { background: #2563eb; color: white; border: none; padding: 9px 10px; cursor: pointer; width: 100%; border-radius: 10px; margin-top: 10px; }
-        .btn.secondary { background: rgba(37,99,235,0.1); color: #1d4ed8; border: 1px solid rgba(37,99,235,0.25); }
         .muted { font-size: 12px; color: #6b7280; line-height: 1.35; }
         .status { font-size: 12px; color: #111827; margin-top: 10px; }
     </style>
 </head>
 <body>
 <h3>FocusFlow Setup</h3>
-<div class="muted">Set your backend URL for analysis + primer streaming.</div>
+<div class="muted">Highlight text on any technical page, then click Explain.</div>
 
 <label for="apiBase">Backend API Base</label>
-<input id="apiBase" placeholder="https://your-deployment.vercel.app" />
+<input id="apiBase" placeholder="http://localhost:3000" />
 
 <button id="saveApi" class="btn">Save API Base</button>
-<button id="clearKnown" class="btn secondary">Clear Known Concepts</button>
 
 <div id="status" class="status"></div>
 <script src="popup.js"></script>
